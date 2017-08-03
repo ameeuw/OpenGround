@@ -35,9 +35,9 @@ uint32_t adc_get_battery_voltage(void);
 
 // internal channel ordering. we will always use AETR0123 internally
 typedef enum {
-  CHANNEL_ID_AILERON = 0,
+  CHANNEL_ID_THROTTLE = 0,
+  CHANNEL_ID_AILERON,
   CHANNEL_ID_ELEVATION,
-  CHANNEL_ID_THROTTLE,
   CHANNEL_ID_RUDDER,
   CHANNEL_ID_CH0,
   CHANNEL_ID_CH1,
