@@ -486,23 +486,25 @@ void frsky_configure(void) {
     cc2500_set_gdo_mode();
 
     // normal config
-    cc2500_set_register(MCSM1    , 0x0F);  // go back to rx after transmission completed
+    cc2500_set_register(MCSM1    , 0x0c);  // go back to rx after transmission completed
     cc2500_set_register(MCSM0    , 0x18);
-    cc2500_set_register(PKTLEN   , FRSKY_PACKET_LENGTH);  // on 251x this has to be exactly our size
-    cc2500_set_register(PKTCTRL0 , 0x05);
+    cc2500_set_register(PKTLEN   , 0x1E);  // on 251x this has to be exactly our size
+    cc2500_set_register(PKTCTRL1,  0x04);
+    cc2500_set_register(PKTCTRL0 , 0x01);
     cc2500_set_register(PA_TABLE0, 0xFF);
-    cc2500_set_register(FSCTRL1  , 0x08);  // D4R-II seems to set 0x68 here ?! instead of 0x08
+    cc2500_set_register(FSCTRL1  , 0x0A);
     cc2500_set_register(FSCTRL0  , 0x00);
     // set base freq 2404 mhz
     cc2500_set_register(FREQ2    , 0x5C);
     cc2500_set_register(FREQ1    , 0x76);
     cc2500_set_register(FREQ0    , 0x27);
-    cc2500_set_register(MDMCFG4  , 0xAA);
-    cc2500_set_register(MDMCFG3  , 0x39);
-    cc2500_set_register(MDMCFG2  , 0x11);
+    cc2500_set_register(MDMCFG4  , 0x7B);
+    cc2500_set_register(MDMCFG3  , 0x61);
+    cc2500_set_register(MDMCFG2  , 0x13);
     cc2500_set_register(MDMCFG1  , 0x23);
     cc2500_set_register(MDMCFG0  , 0x7A);
-    cc2500_set_register(DEVIATN  , 0x42);
+    cc2500_set_register(DEVIATN  , 0x51);
+
     cc2500_set_register(FOCCFG   , 0x16);
     cc2500_set_register(BSCFG    , 0x6C);
     cc2500_set_register(AGCCTRL2 , 0x03);
@@ -521,8 +523,6 @@ void frsky_configure(void) {
     // cc2500_set_register(FIFOTHR  , 0x0F);  // fifo threshold -> tx gdo goes high if 1 byte left
     cc2500_set_register(ADDR     , 0x00);
 
-    // for now just append status
-    cc2500_set_register(PKTCTRL1, CC2500_PKTCTRL1_APPEND_STATUS);
     debug("frsky: configure done\n"); debug_flush();
 }
 
@@ -777,10 +777,6 @@ void frsky_configure_address(void) {
 
     // set address
     cc2500_set_register(ADDR, storage.frsky_txid[0]);
-
-    // append status, filter by address, autoflush on bad crc, PQT = 0
-    cc2500_set_register(PKTCTRL1, CC2500_PKTCTRL1_APPEND_STATUS | CC2500_PKTCTRL1_CRC_AUTOFLUSH | \
-                        CC2500_PKTCTRL1_FLAG_ADR_CHECK_01);
 }
 
 
