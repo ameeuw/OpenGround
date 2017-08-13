@@ -43,10 +43,27 @@
 #define MAX_BIND_PACKET_COUNT 10
 #define HOPDATA_RECEIVE_DONE ((1  <<  (MAX_BIND_PACKET_COUNT))-1)
 
+enum {
+	FRSKY_BIND		= 0,
+	FRSKY_BIND_DONE	= 1000,
+	FRSKY_DATA1,
+	FRSKY_DATA2,
+	FRSKY_DATA3,
+	FRSKY_DATA4,
+	FRSKY_DATA5
+};
 
 static volatile uint8_t frsky_frame_counter;
 static uint8_t frsky_last_requested_telemetry_id;
 static volatile uint32_t frsky_state;
+
+uint16_t state;
+
+uint8_t chanskip;
+uint8_t seq_last_sent;
+uint8_t seq_last_rcvd;
+uint16_t packet_count;
+uint8_t  hopping_frequency_no=0;
 
 // hop data & config
 // uint8_t storage.frsky_txid[2] = {0x16, 0x68};
@@ -76,7 +93,7 @@ static uint8_t frsky_tx_enabled;
 // rf rxtx buffer
 static uint8_t frsky_bind_packet_received;
 static uint16_t frsky_bind_packet_hoptable_flags;
-static volatile uint8_t frsky_packet_buffer[FRSKY_PACKET_BUFFER_SIZE];
+static uint8_t frsky_packet_buffer[FRSKY_PACKET_BUFFER_SIZE];
 static volatile uint8_t frsky_packet_received;
 static volatile uint8_t frsky_packet_sent;
 
@@ -84,6 +101,16 @@ static volatile uint8_t frsky_packet_sent;
 void frsky_init(void) {
     // uint8_t i;
     debug("frsky: init\n"); debug_flush();
+
+	seq_last_sent = 0;
+	seq_last_rcvd = 8;
+	packet_count=0;
+
+    //srand(time(NULL));
+	//while(!chanskip)
+		//chanskip=random(0xfefefefe)%47;
+		//chanskip=(rand()&0xfefefefe)%47;
+    chanskip = 4;
 
     telemetry_init();
 
@@ -173,7 +200,29 @@ void frsky_tx_set_enabled(uint32_t enabled) {
     }
 }
 
+const uint16_t CRC_Short[]={
+	0x0000, 0x1189, 0x2312, 0x329B, 0x4624, 0x57AD, 0x6536, 0x74BF,
+	0x8C48, 0x9DC1, 0xAF5A, 0xBED3, 0xCA6C, 0xDBE5, 0xE97E, 0xF8F7 };
+
+static uint16_t CRCTable(uint8_t val)
+{
+	uint16_t word ;
+	word = CRC_Short[val&0x0F] ;
+	val /= 16 ;
+	return word ^ (0x1081 * val) ;
+}
+
+static uint16_t __attribute__((unused)) crc_x(uint8_t *data, uint8_t len)
+{
+	uint16_t crc = 0;
+	for(uint8_t i=0; i < len; i++)
+		crc = (crc<<8) ^ CRCTable((uint8_t)(crc>>8) ^ *data++);
+	return crc;
+}
+
 static void frsky_send_packet(void) {
+	int RX_num = 5;
+
     // Stop RX DMA
     cc2500_strobe(RFST_SFRX);
 
@@ -221,12 +270,35 @@ static void frsky_send_packet(void) {
     cc2500_transmit_packet(frsky_packet_buffer, frsky_packet_buffer[0] + 1);
 }
 
+void frsky_check_telemetry(uint8_t *pkt,uint8_t len)
+{
+	if(1)
+           // pkt[1] == rx_tx_addr[3] && pkt[2] == rx_tx_addr[2] && 
+       //    len ==(pkt[1] + 3))
+	{	   
+    //storage.frsky_txid[0] = 0;
+    //storage.frsky_txid[1] = 0;
+		
+			if ((pkt[5] >> 4 & 0x0f) == 0x08)
+			{  
+				seq_last_sent = 8;
+				seq_last_rcvd = 0;
+			} 
+			else
+			{
+				if ((pkt[5] >> 4 & 0x03) == (seq_last_rcvd + 1) % 4)
+					seq_last_rcvd = (seq_last_rcvd + 1) % 4;
+			}
+	}
+}
+
+
 static uint8_t frsky_packet_lost_counter;
 
 static void frsky_receive_packet(void) {
     // fetch incoming packet
-    cc2500_process_packet(&frsky_packet_received, (volatile uint8_t *)&frsky_packet_buffer, \
-                      FRSKY_PACKET_BUFFER_SIZE);
+    cc2500_process_packet(&frsky_packet_received, (volatile uint8_t *)&frsky_packet_buffer, 0x0e + 3); // telemetry frame len 17
+                      //FRSKY_PACKET_BUFFER_SIZE);
 
     // increment counter, will be cleared on valid packet rx
     frsky_packet_lost_counter++;
@@ -308,6 +380,90 @@ void TIM3_IRQHandler(void) {
     if (timer_get_flag(TIM3, TIM_SR_UIF)) {
         // clear flag (NOTE: this should never be done at the end of the ISR)
         timer_clear_flag(TIM3, TIM_SR_UIF);
+
+        state = FRSKY_DATA1;
+		switch (state) {
+			default:
+			case FRSKY_DATA1: 
+			/*
+				if ( prev_option != option )
+				{
+					cc2500_set_register(FSCTRL0, option);	// Frequency offset hack 
+					prev_option = option ;
+				}
+				*/
+
+				frsky_set_channel(hopping_frequency_no);
+                frsky_send_packet();
+
+				hopping_frequency_no = (hopping_frequency_no+chanskip)%47;
+                state = FRSKY_DATA1;
+                timer_set_period(TIM3, 9000-1);
+
+				//state++;
+		//timer_set_period(TIM3, 5500-1);
+				break;
+			case FRSKY_DATA2: 
+                cc2500_enter_rxmode();
+				cc2500_strobe(RFST_SIDLE);
+                timer_set_period(TIM3, 200-1);
+                state++;
+                break;
+            case FRSKY_DATA3:		
+                cc2500_strobe(RFST_SRX);
+                timer_set_period(TIM3, 3000-1);
+                state++;
+                break;
+            case FRSKY_DATA4:
+                frsky_receive_packet();
+
+                /*
+                len = CC2500_ReadReg(CC2500_3B_RXBYTES | CC2500_READ_BURST) & 0x7F;	
+                if (len && (len<=(0x0E + 3)))				//Telemetry frame is 17
+                {
+                    packet_count=0;
+                    CC2500_ReadData(pkt, len);
+#if defined TELEMETRY
+                    frsky_check_telemetry(pkt,len);	//check if valid telemetry packets
+                    //parse telemetry packets here
+                    //The same telemetry function used by FrSky(D8).
+#endif
+                } 
+                else
+                {
+                    packet_count++;
+                    // restart sequence on missed packet - might need count or timeout instead of one missed
+                    if(packet_count>100)
+                    {//~1sec
+                        seq_last_sent = 0;
+                        seq_last_rcvd = 8;
+                        packet_count=0;
+#if defined TELEMETRY
+                        telemetry_lost=1;
+#endif
+                    }
+                    cc2500_strobe(RFST_SFRX);			//flush the RXFIFO
+                }
+                */
+                state = FRSKY_DATA1;
+                timer_set_period(TIM3, 300-1);
+                break;
+        }		
+                
+
+				/*
+			case FRSKY_DATA2:
+				cc2500_enter_rxmode();
+				cc2500_strobe(RFST_SIDLE);
+                timer_set_period(TIM3, 200-1);
+				state++;
+				break;
+			case FRSKY_DATA3:		
+				CC2500_Strobe(CC2500_SRX);
+                timer_set_period(TIM3, 3000-1);
+				state++;
+				break;
+				*/
 
         // when will there be the next isr?
         switch (frsky_state) {
@@ -470,7 +626,6 @@ uint8_t frsky_check_transceiver(void) {
         return 1;
     }
 
-    // else
     debug("frsky: got INVALID part and version info?!\n");
     debug_flush();
     return 0;
@@ -1012,6 +1167,211 @@ void frsky_calib_pll(void) {
     debug("frsky: calib pll done\n");
 }
 
+/*
+
+void frsky_main(void) {
+    uint8_t send_telemetry = 0;
+    uint8_t requested_telemetry_id = 0;
+    uint8_t missing = 0;
+    uint8_t hopcount = 0;
+    uint8_t stat_rxcount = 0;
+    // uint8_t badrx_test = 0;
+    uint8_t conn_lost = 1;
+    uint8_t packet_received = 0;
+    // uint8_t i;
+
+    debug("frsky: starting main loop\n");
+
+    // start with any channel:
+    frsky_current_ch_idx = 0;
+
+    // first set channel uses enter rxmode, this will set up dma etc
+    frsky_enter_rxmode(storage.frsky_hop_table[frsky_current_ch_idx]);
+    cc2500_strobe(RFST_SRX);  // D4R-II addition!
+
+    // wait 500ms on the current ch on powerup
+    timeout_set(500);
+
+    // start with conn lost(allow full sync)
+    conn_lost = 1;
+
+    // reset wdt once in order to have at least one second waiting for a packet:
+    wdt_reset();
+
+    // make sure we never read the same packet twice by crc flag
+    frsky_packet_buffer[FRSKY_PACKET_BUFFER_SIZE-1] = 0x00;
+    conn_lost = 1;
+
+    // start main loop
+    while (1) {
+        if (timeout_timed_out()) {
+            // next hop in 9ms
+            if (!conn_lost) {
+                timeout_set(9);
+            } else {
+                timeout_set(500);
+            }
+
+            // wdt reset
+            wdt_reset();
+
+            frsky_increment_channel(1);
+
+            // diversity toggle on missing frame
+            if (!packet_received) {
+                led_button_r_on();
+                /// cc2500_switch_antenna();
+            }
+
+            // go back to rx mode
+            cc2500_enable_receive();
+            // cc2500_enter_rxmode(); THIS BREAKS VD5M!
+            cc2500_strobe(RFST_SRX);
+
+            // if enabled, send a sbus frame in case we lost that frame:
+            if (!packet_received) {
+                // frame was lost, so there was no channel value update
+                // and no transmission for the last frame slot.
+                // therefore we will do a transmission now
+                // (frame lost packet flag will be set)
+                // sbus_start_transmission(SBUS_FRAME_LOST);
+            }
+
+            // check for packets
+            if (packet_received > 0) {
+                debug_putc('0');  // + cc2500_get_current_antenna());
+            } else {
+                debug_putc('!');
+                missing++;
+            }
+            packet_received = 0;
+
+            if (hopcount++ >= FRSKY_COUNT_RXSTATS) {
+                uint16_t percent_ok;
+                debug(" STATS: ");
+                percent_ok = (((uint16_t)stat_rxcount) * 100) / FRSKY_COUNT_RXSTATS;
+                debug_put_uint8(percent_ok);
+                debug_putc('%');
+                debug_put_newline();
+                debug_flush();
+
+                // for testing
+                // debug_put_uint16((uint16_t)(((frsky_packet_buffer[11] & 0x0F)\
+                // << 8 | frsky_packet_buffer[8])));
+                // debug_put_uint16(frsky_rssi);
+                // debug_putc(' ');
+
+                // link quality
+                frsky_link_quality = stat_rxcount;
+
+                if (stat_rxcount == 0) {
+                    conn_lost = 1;
+                    // enter failsafe mode
+                    // failsafe_enter();
+                    debug("\nCONN LOST!\n");
+
+                    // no connection led info
+                }
+
+                // statistics
+                hopcount = 1;
+                stat_rxcount = 0;
+            }
+
+            // led_button_r_off();
+
+            // handle ovfs
+            frsky_handle_overflows();
+        }
+
+        // process incoming data
+        cc2500_process_packet(&frsky_packet_received, (volatile uint8_t *)&frsky_packet_buffer, \
+                              FRSKY_PACKET_BUFFER_SIZE);
+
+        if (frsky_packet_received) {
+            led_button_r_off();
+
+            // valid packet?
+            if (FRSKY_VALID_PACKET(frsky_packet_buffer)) {
+                // ok, valid packet for us
+                led_button_l_on();
+
+                // we hop to the next channel in 0.5ms
+                // afterwards hops are in 9ms grid again
+                // this way we can have up to +/-1ms jitter on our 9ms timebase
+                // without missing packets
+                // 500us delay:
+                timeout2_delay_100us(5);
+
+                // every 4th frame is a telemetry frame(transmits every 36ms)
+                if ((frsky_packet_buffer[3] % 4) == 2) {
+                    // next frame is a telemetry frame
+                    send_telemetry = 1;
+                }
+
+                // hal_timeout_delay_100us(15);
+                if (send_telemetry) {
+                    timeout_set(9);
+                } else {
+                    timeout_set(0);
+                }
+
+                // start send timeout, in case we want to tx data,
+                // this has to be done 2000us after rx
+                // as we delayed the processing by 500us already, do the remaining 1500us
+                timeout2_set_100us(15);
+
+                // reset wdt
+                wdt_reset();
+
+                // reset missing packet counter
+                missing = 0;
+
+                // always store the last telemtry request id
+                requested_telemetry_id   = frsky_packet_buffer[4];
+
+                // stats
+                stat_rxcount++;
+                packet_received = 1;
+                conn_lost = 0;
+
+                // extract rssi in frsky format
+                frsky_rssi = frsky_extract_rssi(frsky_packet_buffer[FRSKY_PACKET_BUFFER_SIZE-2]);
+
+                // extract channel data:
+                frsky_update_ppm();
+
+                // debug_put_hex8(frsky_packet_buffer[3]);
+
+                // make sure we never read the same packet twice by crc flag
+                frsky_packet_buffer[FRSKY_PACKET_BUFFER_SIZE-1] = 0x00;
+
+                led_button_l_off();
+
+                if (send_telemetry) {
+                    // change channel:
+                    frsky_increment_channel(1);
+
+                    while (!timeout2_timed_out()) {
+                        // wait for tx timeslot
+                    }
+
+                   // build & send packet
+                   frsky_send_telemetry(requested_telemetry_id);
+
+                   // mark as done
+                   send_telemetry = 0;
+                }
+            }
+        } else {
+            // invalid packet -> mark as not received
+            frsky_packet_received = 0;
+        }
+    }
+}
+
+*/
+
 void frsky_set_channel(uint8_t hop_index) {
     uint8_t ch = storage.frsky_hop_table[hop_index];
     // debug_putc('S'); debug_put_hex8(ch);
@@ -1059,6 +1419,39 @@ uint8_t frsky_extract_rssi(uint8_t rssi_raw) {
 }
 
 
+
+void frsky_update_ppm(void) {
+    // build uint16_t array from data:
+    uint16_t channel_data[8];
+
+    /*debug("[");debug_flush();
+    for (cnt = 0; cnt < FRSKY_PACKET_BUFFER_SIZE; cnt++) {
+        debug_put_hex8(frsky_packet_buffer[cnt]);
+        debug_putc(' ');
+        debug_flush();
+    }
+    debug("]\n"); debug_flush();
+    */
+
+    // extract channel data from packet:
+    channel_data[0] = (uint16_t)(((frsky_packet_buffer[10] & 0x0F) << 8 | frsky_packet_buffer[6]));
+    channel_data[1] = (uint16_t)(((frsky_packet_buffer[10] & 0xF0) << 4 | frsky_packet_buffer[7]));
+    channel_data[2] = (uint16_t)(((frsky_packet_buffer[11] & 0x0F) << 8 | frsky_packet_buffer[8]));
+    channel_data[3] = (uint16_t)(((frsky_packet_buffer[11] & 0xF0) << 4 | frsky_packet_buffer[9]));
+    channel_data[4] = (uint16_t)(((frsky_packet_buffer[16] & 0x0F) << 8 | frsky_packet_buffer[12]));
+    channel_data[5] = (uint16_t)(((frsky_packet_buffer[16] & 0xF0) << 4 | frsky_packet_buffer[13]));
+    channel_data[6] = (uint16_t)(((frsky_packet_buffer[17] & 0x0F) << 8 | frsky_packet_buffer[14]));
+    channel_data[7] = (uint16_t)(((frsky_packet_buffer[17] & 0xF0) << 4 | frsky_packet_buffer[15]));
+
+    // exit failsafe mode
+    /// failsafe_exit();
+
+    // copy to output modules:
+    /// sbus_update(channel_data);
+    /// sbus_start_transmission(SBUS_FRAME_NOT_LOST);
+    // and to ppm
+    /// ppm_update(channel_data);
+}
 /*
 void frsky_send_telemetry(uint8_t telemetry_id) {
     static uint8_t test = 0;
@@ -1106,6 +1499,149 @@ void frsky_send_telemetry(uint8_t telemetry_id) {
     // SHOULD NOT BE NECESSARY, DEFAULT IS BACK TO RX// cc2500_strobe(RFST_SRX);
 }
 */
+
+
+// useful for debugging/ sniffing packets from anothe tx or rx
+// make sure to bind this rx before using this...
+void frsky_frame_sniffer(void) {
+    uint8_t send_telemetry = 0;
+    uint8_t missing = 0;
+    uint8_t hopcount = 0;
+    uint8_t stat_rxcount = 0;
+    uint8_t badrx_test = 0;
+    uint8_t conn_lost = 1;
+    uint8_t packet_received = 0;
+    uint8_t i;
+
+    debug("frsky: entering sniffer mode\n");
+
+    // start with any channel:
+    frsky_current_ch_idx = 0;
+
+    // first set channel uses enter rxmode, this will set up dma etc
+    frsky_enter_rxmode(storage.frsky_hop_table[frsky_current_ch_idx]);
+
+    // wait 500ms on the current ch on powerup
+    timeout_set(500);
+
+    // start with conn lost(allow full sync)
+    conn_lost = 1;
+
+    // reset wdt once in order to have at least one second waiting for a packet:
+    wdt_reset();
+
+    // start main loop
+    while (1) {
+        wdt_reset();
+
+        if (timeout_timed_out()) {
+            led_button_r_on();
+
+            // next hop in 9ms
+            if (!conn_lost) {
+                timeout_set(9);
+            } else {
+                timeout_set(500);
+            }
+
+            frsky_increment_channel(1);
+
+            // strange delay
+            // _delay_us(1000);
+            cc2500_rx_sleep();
+
+            // go back to rx mode
+            frsky_packet_received = 0;
+            cc2500_enable_receive();
+
+            cc2500_strobe(RFST_SRX);
+
+            // check for packets
+            if (!packet_received) {
+                if (send_telemetry) {
+                    debug("< MISSING\n");
+                    send_telemetry = 0;
+                } else {
+                    debug("> MISSING\n");
+                }
+                send_telemetry = 0;
+                missing++;
+            }
+            packet_received = 0;
+
+            if (hopcount++ >= 100) {
+                if (stat_rxcount == 0) {
+                    conn_lost = 1;
+                    debug("\nCONN LOST!\n");
+                }
+
+                // statistics
+                hopcount = 1;
+                stat_rxcount = 0;
+            }
+
+            led_button_r_off();
+        }
+
+        // handle ovfs
+        frsky_handle_overflows();
+
+        // process incoming data
+        cc2500_process_packet(&frsky_packet_received, (volatile uint8_t *)&frsky_packet_buffer, \
+                              FRSKY_PACKET_BUFFER_SIZE);
+
+
+        if (frsky_packet_received) {
+            if (FRSKY_VALID_PACKET(frsky_packet_buffer)) {
+                // ok, valid packet for us
+                led_button_l_on();
+
+                // we hop to the next channel in 0.5ms
+                // afterwards hops are in 9ms grid again
+                // this way we can have up to +/-1ms jitter on our 9ms timebase
+                // without missing packets
+                delay_us(500);
+                timeout_set(0);
+
+                // dump all packets!
+                if (send_telemetry) {
+                    debug("< ");
+                    send_telemetry = 0;
+                } else {
+                    debug("> ");
+                }
+
+                for (i = 0; i < FRSKY_PACKET_BUFFER_SIZE; i++) {
+                    debug_put_hex8(frsky_packet_buffer[i]);
+                    debug_putc(' ');
+                }
+                debug("\n");
+
+                // reset wdt
+                wdt_reset();
+
+                // reset missing packet counter
+                missing = 0;
+
+                // every 4th frame is a telemetry frame(transmits every 36ms)
+                if ((frsky_packet_buffer[3] % 4) == 2) {
+                    send_telemetry = 1;
+                }
+
+                // stats
+                stat_rxcount++;
+                packet_received = 1;
+                conn_lost = 0;
+
+                // make sure we never read the same packet twice by crc flag
+                frsky_packet_buffer[FRSKY_PACKET_BUFFER_SIZE-1] = 0x00;
+
+                led_button_l_off();
+            }
+        }
+    }
+}
+
 
 #if 0
 
