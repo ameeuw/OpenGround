@@ -220,8 +220,17 @@ static uint16_t __attribute__((unused)) crc_x(uint8_t *data, uint8_t len)
 	return crc;
 }
 
+uint16_t adc_scale_d16(uint8_t idx) {
+    // -> remap +/-3200 to 275-1025-1775
+    int32_t val = adc_get_channel_rescaled(idx);
+    val = (15 * val) / 64;
+    val = val + 1025;
+
+    return (uint16_t) val;
+}
+
 static void frsky_send_packet(void) {
-	int RX_num = 5;
+	int RX_num = 10;
 
     // Stop RX DMA
     cc2500_strobe(RFST_SFRX);
@@ -234,37 +243,55 @@ static void frsky_send_packet(void) {
     uint16_t adc_data[8];
     uint32_t i;
     for (i = 0; i < 8; i++) {
-        adc_data[i] = adc_get_channel_packetdata(i);
+        //adc_data[i] = adc_get_channel_packetdata(i);
+        adc_data[i] = adc_scale_d16(i);
     }
 
     // build frsky packet
     // packet length
-    frsky_packet_buffer[0] = 0x11;
+    frsky_packet_buffer[0] = 0x1D;
     // txid
     frsky_packet_buffer[1] = storage.frsky_txid[0];
     frsky_packet_buffer[2] = storage.frsky_txid[1];
     // frame counter
-    frsky_packet_buffer[3] = frsky_frame_counter;
+    //frsky_packet_buffer[3] = frsky_frame_counter;
+    frsky_packet_buffer[3] = 0x02;
     // last received telemetry frame
-    frsky_packet_buffer[4] = frsky_last_requested_telemetry_id;
-    // my tgy 9x sends 0x0B (is this how many bytes are free in hub buf?)
-    frsky_packet_buffer[5] = 0x0B;
-    // 6 .. 9 is LO(channel data 0..3)
-    frsky_packet_buffer[6] = adc_data[0] & 0xFF;
-    frsky_packet_buffer[7] = adc_data[1] & 0xFF;
-    frsky_packet_buffer[8] = adc_data[2] & 0xFF;
-    frsky_packet_buffer[9] = adc_data[3] & 0xFF;
-    // 10 .. 11 is HI(channel data 0..3)
-    frsky_packet_buffer[10] = ((adc_data[0]>>8) & 0x0F) | ((adc_data[1]>>4) & 0xF0);
-    frsky_packet_buffer[11] = ((adc_data[2]>>8) & 0x0F) | ((adc_data[3]>>4) & 0xF0);
-    // 12 .. 15 is LO(channel data 4..7)
-    frsky_packet_buffer[12] = adc_data[4] & 0xFF;
-    frsky_packet_buffer[13] = adc_data[5] & 0xFF;
-    frsky_packet_buffer[14] = adc_data[6] & 0xFF;
-    frsky_packet_buffer[15] = adc_data[7] & 0xFF;
-    // 16 .. 17 is HI(channel data 4..7)
-    frsky_packet_buffer[16] = ((adc_data[4]>>8) & 0x0F) | ((adc_data[5]>>4) & 0xF0);
-    frsky_packet_buffer[17] = ((adc_data[6]>>8) & 0x0F) | ((adc_data[7]>>4) & 0xF0);
+
+	frsky_packet_buffer[4] = (chanskip<<6)|hopping_frequency_no;
+	frsky_packet_buffer[5] = chanskip>>2;
+	frsky_packet_buffer[6] = RX_num;
+	frsky_packet_buffer[7] = 0;
+	frsky_packet_buffer[8] = 0;
+
+	uint8_t ch = 0;
+	for(uint8_t i = 0; i <12 ; i+=3)
+	{//12 bytes
+		uint16_t chan_0;
+		uint16_t chan_1;
+
+		chan_0 = adc_data[ch++];
+		chan_1 = adc_data[ch++];
+
+		//
+		frsky_packet_buffer[9+i] = chan_0 & 0xff;//3 bytes*4
+		frsky_packet_buffer[9+i+1]=(((chan_0>>8) & 0x0F)|(chan_1 << 4));
+		frsky_packet_buffer[9+i+2]=chan_1>>4;
+	}
+
+	frsky_packet_buffer[21] = seq_last_sent << 4 | seq_last_rcvd;//8 at start
+	if (seq_last_sent < 0x08 && seq_last_rcvd < 8)
+		seq_last_sent = (seq_last_sent + 1) % 4;
+	else if (seq_last_rcvd == 0x00)
+		seq_last_sent = 1;
+
+	uint8_t limit = 28; // FCC
+	for (uint8_t i=22;i<limit;i++)
+		frsky_packet_buffer[i]=0;
+	uint16_t lcrc = crc_x(&frsky_packet_buffer[3], limit-3);
+	
+	frsky_packet_buffer[limit++]=lcrc>>8;//high byte
+	frsky_packet_buffer[limit]=lcrc;//low byte
 
     // send packet
     cc2500_transmit_packet(frsky_packet_buffer, frsky_packet_buffer[0] + 1);
@@ -318,6 +345,8 @@ static void frsky_receive_packet(void) {
                                         (uint32_t)frsky_extract_rssi(frsky_packet_buffer[18]) -
                                         (uint32_t)frsky_rssi_telemetry)) / 128;
 
+            frsky_check_telemetry(frsky_packet_buffer, 18);
+
             // extract telemetry packets:
             // buffer[0]  = bytes used
             // buffer[1]  = last received telemetry id
@@ -331,6 +360,7 @@ static void frsky_receive_packet(void) {
             // * not all 10 bytes has to be filled in, only the number of bytes that were received
             //   will be sent in one frame
             //
+            /* XXX
             uint8_t telemetry_frame_id = frsky_packet_buffer[7];
             if (telemetry_frame_id == frsky_last_requested_telemetry_id) {
                 // request new data with next packet
@@ -343,6 +373,7 @@ static void frsky_receive_packet(void) {
                     telemetry_enqueue(frsky_packet_buffer[8 + i]);
                 }
             }
+            */
 
             /*debug_flush();
             uint32_t i;
@@ -446,7 +477,7 @@ void TIM3_IRQHandler(void) {
                 }
                 */
                 state = FRSKY_DATA1;
-                timer_set_period(TIM3, 300-1);
+                TIM_SetAutoreload(TIM3, 300-1);
                 break;
         }		
                 
@@ -455,17 +486,18 @@ void TIM3_IRQHandler(void) {
 			case FRSKY_DATA2:
 				cc2500_enter_rxmode();
 				cc2500_strobe(RFST_SIDLE);
-                timer_set_period(TIM3, 200-1);
+                TIM_SetAutoreload(TIM3, 200-1);
 				state++;
 				break;
 			case FRSKY_DATA3:		
 				CC2500_Strobe(CC2500_SRX);
-                timer_set_period(TIM3, 3000-1);
+                TIM_SetAutoreload(TIM3, 3000-1);
 				state++;
 				break;
 				*/
 
         // when will there be the next isr?
+#if 0		
         switch (frsky_state) {
             default:
             case (0) :
@@ -477,7 +509,7 @@ void TIM3_IRQHandler(void) {
                 frsky_send_packet();
                 frsky_frame_counter++;
                 // next hop in 9ms
-                timer_set_period(TIM3, 9000-1);
+                TIM_SetAutoreload(TIM3, 9000-1);
                 frsky_state = 1;
                 break;
 
@@ -488,7 +520,7 @@ void TIM3_IRQHandler(void) {
                 frsky_send_packet();
                 frsky_frame_counter++;
                 // next hop in 9ms
-                timer_set_period(TIM3, 9000-1);
+                TIM_SetAutoreload(TIM3, 9000-1);
                 frsky_state = 2;
                 break;
 
@@ -500,7 +532,7 @@ void TIM3_IRQHandler(void) {
                 frsky_frame_counter++;
                 // after this tx we expect rx data,
                 // TX is finished after ~7.2ms -> next isr in 7.5ms
-                timer_set_period(TIM3, 7500-1);
+                TIM_SetAutoreload(TIM3, 7500-1);
                 frsky_state = 3;
                 break;
 
@@ -510,7 +542,7 @@ void TIM3_IRQHandler(void) {
                 // enable LNA
                 cc2500_enter_rxmode();
                 // the next hop will now in 1.3ms (after freq stabilised)
-                timer_set_period(TIM3, 1300-1-0*200);
+                TIM_SetAutoreload(TIM3, 1300-1-0*200);
                 frsky_state = 4;
                 break;
 
@@ -522,13 +554,13 @@ void TIM3_IRQHandler(void) {
                 frsky_frame_counter++;
                 // the next hop will now in 9.2ms
                 // 2*9 = 18 = 7.5 + 1.3 + 9.2
-                timer_set_period(TIM3, 9200-1+0*200);
+                TIM_SetAutoreload(TIM3, 9200-1+0*200);
                 frsky_state = 0;
                 break;
 
             case (0x80) :
                 // bind mode, set timeout to 9ms
-                timer_set_period(TIM3, 9000);
+                TIM_SetAutoreload(TIM3, 9000);
 
                 // get bind packet index
                 frsky_frame_counter++;
@@ -541,6 +573,8 @@ void TIM3_IRQHandler(void) {
                 frsky_state = 0x80;
                 break;
         }
+#endif
+
     }
 }
 
@@ -1167,211 +1201,6 @@ void frsky_calib_pll(void) {
     debug("frsky: calib pll done\n");
 }
 
-/*
-
-void frsky_main(void) {
-    uint8_t send_telemetry = 0;
-    uint8_t requested_telemetry_id = 0;
-    uint8_t missing = 0;
-    uint8_t hopcount = 0;
-    uint8_t stat_rxcount = 0;
-    // uint8_t badrx_test = 0;
-    uint8_t conn_lost = 1;
-    uint8_t packet_received = 0;
-    // uint8_t i;
-
-    debug("frsky: starting main loop\n");
-
-    // start with any channel:
-    frsky_current_ch_idx = 0;
-
-    // first set channel uses enter rxmode, this will set up dma etc
-    frsky_enter_rxmode(storage.frsky_hop_table[frsky_current_ch_idx]);
-    cc2500_strobe(RFST_SRX);  // D4R-II addition!
-
-    // wait 500ms on the current ch on powerup
-    timeout_set(500);
-
-    // start with conn lost(allow full sync)
-    conn_lost = 1;
-
-    // reset wdt once in order to have at least one second waiting for a packet:
-    wdt_reset();
-
-    // make sure we never read the same packet twice by crc flag
-    frsky_packet_buffer[FRSKY_PACKET_BUFFER_SIZE-1] = 0x00;
-    conn_lost = 1;
-
-    // start main loop
-    while (1) {
-        if (timeout_timed_out()) {
-            // next hop in 9ms
-            if (!conn_lost) {
-                timeout_set(9);
-            } else {
-                timeout_set(500);
-            }
-
-            // wdt reset
-            wdt_reset();
-
-            frsky_increment_channel(1);
-
-            // diversity toggle on missing frame
-            if (!packet_received) {
-                led_button_r_on();
-                /// cc2500_switch_antenna();
-            }
-
-            // go back to rx mode
-            cc2500_enable_receive();
-            // cc2500_enter_rxmode(); THIS BREAKS VD5M!
-            cc2500_strobe(RFST_SRX);
-
-            // if enabled, send a sbus frame in case we lost that frame:
-            if (!packet_received) {
-                // frame was lost, so there was no channel value update
-                // and no transmission for the last frame slot.
-                // therefore we will do a transmission now
-                // (frame lost packet flag will be set)
-                // sbus_start_transmission(SBUS_FRAME_LOST);
-            }
-
-            // check for packets
-            if (packet_received > 0) {
-                debug_putc('0');  // + cc2500_get_current_antenna());
-            } else {
-                debug_putc('!');
-                missing++;
-            }
-            packet_received = 0;
-
-            if (hopcount++ >= FRSKY_COUNT_RXSTATS) {
-                uint16_t percent_ok;
-                debug(" STATS: ");
-                percent_ok = (((uint16_t)stat_rxcount) * 100) / FRSKY_COUNT_RXSTATS;
-                debug_put_uint8(percent_ok);
-                debug_putc('%');
-                debug_put_newline();
-                debug_flush();
-
-                // for testing
-                // debug_put_uint16((uint16_t)(((frsky_packet_buffer[11] & 0x0F)\
-                // << 8 | frsky_packet_buffer[8])));
-                // debug_put_uint16(frsky_rssi);
-                // debug_putc(' ');
-
-                // link quality
-                frsky_link_quality = stat_rxcount;
-
-                if (stat_rxcount == 0) {
-                    conn_lost = 1;
-                    // enter failsafe mode
-                    // failsafe_enter();
-                    debug("\nCONN LOST!\n");
-
-                    // no connection led info
-                }
-
-                // statistics
-                hopcount = 1;
-                stat_rxcount = 0;
-            }
-
-            // led_button_r_off();
-
-            // handle ovfs
-            frsky_handle_overflows();
-        }
-
-        // process incoming data
-        cc2500_process_packet(&frsky_packet_received, (volatile uint8_t *)&frsky_packet_buffer, \
-                              FRSKY_PACKET_BUFFER_SIZE);
-
-        if (frsky_packet_received) {
-            led_button_r_off();
-
-            // valid packet?
-            if (FRSKY_VALID_PACKET(frsky_packet_buffer)) {
-                // ok, valid packet for us
-                led_button_l_on();
-
-                // we hop to the next channel in 0.5ms
-                // afterwards hops are in 9ms grid again
-                // this way we can have up to +/-1ms jitter on our 9ms timebase
-                // without missing packets
-                // 500us delay:
-                timeout2_delay_100us(5);
-
-                // every 4th frame is a telemetry frame(transmits every 36ms)
-                if ((frsky_packet_buffer[3] % 4) == 2) {
-                    // next frame is a telemetry frame
-                    send_telemetry = 1;
-                }
-
-                // hal_timeout_delay_100us(15);
-                if (send_telemetry) {
-                    timeout_set(9);
-                } else {
-                    timeout_set(0);
-                }
-
-                // start send timeout, in case we want to tx data,
-                // this has to be done 2000us after rx
-                // as we delayed the processing by 500us already, do the remaining 1500us
-                timeout2_set_100us(15);
-
-                // reset wdt
-                wdt_reset();
-
-                // reset missing packet counter
-                missing = 0;
-
-                // always store the last telemtry request id
-                requested_telemetry_id   = frsky_packet_buffer[4];
-
-                // stats
-                stat_rxcount++;
-                packet_received = 1;
-                conn_lost = 0;
-
-                // extract rssi in frsky format
-                frsky_rssi = frsky_extract_rssi(frsky_packet_buffer[FRSKY_PACKET_BUFFER_SIZE-2]);
-
-                // extract channel data:
-                frsky_update_ppm();
-
-                // debug_put_hex8(frsky_packet_buffer[3]);
-
-                // make sure we never read the same packet twice by crc flag
-                frsky_packet_buffer[FRSKY_PACKET_BUFFER_SIZE-1] = 0x00;
-
-                led_button_l_off();
-
-                if (send_telemetry) {
-                    // change channel:
-                    frsky_increment_channel(1);
-
-                    while (!timeout2_timed_out()) {
-                        // wait for tx timeslot
-                    }
-
-                   // build & send packet
-                   frsky_send_telemetry(requested_telemetry_id);
-
-                   // mark as done
-                   send_telemetry = 0;
-                }
-            }
-        } else {
-            // invalid packet -> mark as not received
-            frsky_packet_received = 0;
-        }
-    }
-}
-
-*/
-
 void frsky_set_channel(uint8_t hop_index) {
     uint8_t ch = storage.frsky_hop_table[hop_index];
     // debug_putc('S'); debug_put_hex8(ch);
@@ -1380,8 +1209,8 @@ void frsky_set_channel(uint8_t hop_index) {
     cc2500_strobe(RFST_SIDLE);
 
     // fetch and set our stored pll calib data:
-    cc2500_set_register(FSCAL3, frsky_calib_fscal3);
-    cc2500_set_register(FSCAL2, frsky_calib_fscal2);
+    //cc2500_set_register(FSCAL3, frsky_calib_fscal3);
+    //cc2500_set_register(FSCAL2, frsky_calib_fscal2);
     cc2500_set_register(FSCAL1, frsky_calib_fscal1_table[hop_index]);
 
     // set channel
@@ -1641,48 +1470,3 @@ void frsky_frame_sniffer(void) {
         }
     }
 }
-
-
-#if 0
-
-
-
-
-uint8_t frsky_append_hub_data(uint8_t sensor_id, uint16_t value, uint8_t *buf) {
-    uint8_t index = 0;
-    uint8_t val8;
-
-    // add header:
-    buf[index++] = FRSKY_HUB_TELEMETRY_HEADER;
-    // add sensor id
-    buf[index++] = sensor_id;
-    // add data, take care of byte stuffing
-    // low byte
-    val8 = LO(value);
-    if (val8 == 0x5E) {
-        buf[index++] = 0x5D;
-        buf[index++] = 0x3E;
-    } else if (val8 == 0x5D) {
-        buf[index++] = 0x5D;
-        buf[index++] = 0x3D;
-    } else {
-        buf[index++] = val8;
-    }
-    // high byte
-    val8 = HI(value);
-    if (val8 == 0x5E) {
-        buf[index++] = 0x5D;
-        buf[index++] = 0x3E;
-    } else if (val8 == 0x5D) {
-        buf[index++] = 0x5D;
-        buf[index++] = 0x3D;
-    } else {
-        buf[index++] = val8;
-    }
-    // add footer:
-    buf[index] = FRSKY_HUB_TELEMETRY_HEADER;
-
-    // return index:
-    return index;
-}
-#endif  // 0
