@@ -59,8 +59,8 @@ void storage_init(void) {
 
     debug("storage: loaded hoptable[]:\n");
     for (i = 0; i < 9; i++) {
-            debug_put_hex8(storage.frsky_hop_table[i]);
-            debug_putc(' ');
+        debug_put_hex8(storage.frsky_hop_table[i]);
+        debug_putc(' ');
     }
 
     debug("...\n");
@@ -139,6 +139,10 @@ static void storage_load_defaults(void) {
 
     storage.frsky_freq_offset = FRSKY_DEFAULT_FSCAL_VALUE;
 
+    storage.chan_order = TAER;
+    storage.rc_mode = MODE_2;
+    storage.current_model = 0;
+
     // copy hoptable
     for (i = 0; i < FRSKY_HOPTABLE_SIZE; i++) {
         storage.frsky_hop_table[i] = tmp[i];
@@ -162,13 +166,23 @@ static void storage_load_defaults(void) {
         storage.model[i].name[6] = 0;
         storage.model[i].timer = 3*60;
         storage.model[i].stick_scale = 100;
+
+        storage.model[i].protocol = FRSKY_X;
+        storage.model[i].rx_number = 0;
     }
 
     // add example model
-    storage_mode_set_name(0, "TinyWhoop");
+    storage_mode_set_name(0, "Model X");
     storage.model[0].timer = 3*60;
-    storage.model[i].stick_scale = 50;
-    storage.current_model = 0;
+    storage.model[0].stick_scale = 100;
+    storage.model[0].protocol = FRSKY_X;
+    storage.model[0].rx_number = 0;
+
+    storage_mode_set_name(1, "Model D");
+    storage.model[1].timer = 3*60;
+    storage.model[1].stick_scale = 100;
+    storage.model[1].protocol = FRSKY_D;
+    storage.model[1].rx_number = 0;
 }
 
 void storage_mode_set_name(uint8_t index, char *str) {

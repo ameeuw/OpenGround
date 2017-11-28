@@ -24,7 +24,7 @@
 
 #include "frsky.h"
 
-#define STORAGE_VERSION_ID 0x03
+#define STORAGE_VERSION_ID 0x04
 #define STORAGE_MODEL_NAME_LEN 11
 #define STORAGE_MODEL_MAX_COUNT 10
 
@@ -38,6 +38,20 @@ void storage_mode_set_name(uint8_t index, char *str);
 /*static void storage_write(uint8_t *buffer, uint16_t len);
 static void storage_read(uint8_t *storage_ptr, uint16_t len);*/
 
+typedef enum {
+    MODE_1 = 0,
+    MODE_2,
+    MODE_3,
+    MODE_4,
+    MODE_CNT,
+} rc_mode_t;
+
+typedef enum {
+    AETR = 0,
+    TAER,
+    CH_ORDER_CNT,
+} ch_order_t;
+
 // model description
 typedef struct {
     // name of the model
@@ -47,6 +61,9 @@ typedef struct {
     // scale
     uint8_t stick_scale;
     // add further data here...
+
+    frsky_proto_t protocol;
+    uint8_t rx_number;
 } MODEL_DESC;
 
 // our storage struct contains all data that has to be stored on flash
@@ -57,6 +74,8 @@ typedef struct {
     uint8_t frsky_txid[2];
     uint8_t frsky_hop_table[FRSKY_HOPTABLE_SIZE];
     int8_t  frsky_freq_offset;
+    ch_order_t chan_order;
+    rc_mode_t rc_mode;
     // stick calibration data
     uint16_t stick_calibration[4][3];
     // model settings
