@@ -33,12 +33,92 @@
 static uint16_t adc_data[ADC_CHANNEL_COUNT];
 static uint16_t adc_battery_voltage_raw_filtered;
 
+static uint32_t ch_adc_map[8];
+static uint32_t ch_adc_reverse_map[8];
+
 // internal functions
 static void adc_init_rcc(void);
 static void adc_init_gpio(void);
 static void adc_init_mode(void);
 static void adc_init_dma(void);
 static void adc_dma_arm(void);
+
+typedef enum {
+    A = 0,
+    E,
+    T,
+    R,
+    CH0,
+    CH1,
+    CH2,
+    CH3,
+    CH_SIZE,
+} ch_id_t;
+
+typedef enum {
+    I6S_HW = 0,
+    EVO_HW,
+} hw_id_t;
+
+// hardware adc map:
+// right horizontal stick, right vertical stick,
+// left vertical stick, left horizontal stick
+static uint32_t adc_map[2][8] = {
+    { 0, 1, 2, 3, 4, 5, 8, 9 },
+    { 3, 2, 1, 0, 5, 8, 6, 4 }
+};
+
+ch_id_t mode_map[4][4] = {
+    // mode 1
+    { A, T, E, R},
+    // mode 2
+    { A, E, T, R},
+    // mode 3
+    { R, T, E, A},
+    // mode 4
+    { R, E, T, A}
+};
+
+ch_id_t chan_map[][4] = {
+    { A, E, T, R },
+    { T, A, E, R }
+};
+
+void init_ch_adc_map() {
+    hw_id_t hw_id;
+    uint8_t idx;
+
+    switch (config_hw_revision) {
+        case CONFIG_HW_REVISION_EVOLUTION:
+            hw_id = EVO_HW;
+            break;
+        case CONFIG_HW_REVISION_I6S:
+        default:
+            hw_id = I6S_HW;
+            break;
+    }
+
+    for (int i = 0; i < 4; i++) {
+        idx = chan_map[storage.chan_order][i];
+        idx = mode_map[storage.rc_mode][idx];
+        idx = adc_map[hw_id][idx];
+        ch_adc_map[i] = idx;
+        ch_adc_reverse_map[idx] = i;
+    }
+
+    for (int i = 4; i < 8; i++) {
+        ch_adc_map[i] = adc_map[hw_id][i];
+        ch_adc_reverse_map[ch_adc_map[i]] = i;
+    }
+
+
+    debug("init chan_adc_map:");
+    debug_put_newline();
+    for (int i = 0; i < 8; i++) {
+        debug_put_uint16(ch_adc_map[i]);
+    }
+    debug_flush();
+}
 
 void adc_init(void) {
     debug("adc: init\n"); debug_flush();
@@ -57,78 +137,74 @@ void adc_init(void) {
     }
 }
 
-uint16_t adc_get_channel(uint32_t id) {
-    // fetch correct adc channel based on hw revision
-    if (config_hw_revision == CONFIG_HW_REVISION_I6S) {
-        // FS-i6S mapping:
-        switch (id) {
-            default : return adc_data[id];
-            case (CHANNEL_ID_AILERON)  : return adc_data[0];
-            case (CHANNEL_ID_ELEVATION): return adc_data[1];
-            case (CHANNEL_ID_THROTTLE) : return adc_data[2];
-            case (CHANNEL_ID_RUDDER)   : return adc_data[3];
-            case (CHANNEL_ID_CH0)      : return adc_data[4];
-            case (CHANNEL_ID_CH1)      : return adc_data[5];
-            case (CHANNEL_ID_CH2)      : return adc_data[8];
-            case (CHANNEL_ID_CH3)      : return adc_data[9];
-        }
-    } else if (config_hw_revision == CONFIG_HW_REVISION_EVOLUTION) {
-        // TGY Evolution mapping:
-        switch (id) {
-            default : return adc_data[id];
-            case (CHANNEL_ID_AILERON)  : return 4095 - adc_data[3];
-            case (CHANNEL_ID_ELEVATION): return 4095 - adc_data[2];
-            case (CHANNEL_ID_THROTTLE) : return 4095 - adc_data[1];
-            case (CHANNEL_ID_RUDDER)   : return 4095 - adc_data[0];
-            case (CHANNEL_ID_CH0)      : return adc_data[5];
-            case (CHANNEL_ID_CH1)      : return adc_data[8];
-            case (CHANNEL_ID_CH2)      : return adc_data[6];
-            case (CHANNEL_ID_CH3)      : return adc_data[4];
-        }
-    }
 
-    // else: undefined!
-    debug("adc: invalid hw revision ");
-    debug_put_uint8(config_hw_revision);
-    debug(" given!\n"); debug_flush();
-    return 0;
+#define IS_EVO ((config_hw_revision == CONFIG_HW_REVISION_EVOLUTION))
+uint16_t adc_get_channel(uint32_t idx) {
+    if (IS_EVO)
+        return 4095 - adc_data[idx];
+
+    return adc_data[idx];
+}
+
+char *adc_get_channel_name_for_adc(uint8_t i, bool short_descr) {
+    return adc_get_channel_name(ch_adc_reverse_map[i], short_descr);
 }
 
 char *adc_get_channel_name(uint8_t i, bool short_descr) {
+    if (i < 4) {
+        switch (chan_map[storage.chan_order][i]) {
+            default          : return ((short_descr) ? "?" : "???");
+            case (A)         : return ((short_descr) ? "A" : "AIL");
+            case (E)         : return ((short_descr) ? "E" : "ELE");
+            case (T)         : return ((short_descr) ? "T" : "THR");
+            case (R)         : return ((short_descr) ? "R" : "RUD");
+        }
+    }
+
     switch (i) {
-        default                     : return ((short_descr) ? "?" : "???");
-        case (CHANNEL_ID_AILERON)   : return ((short_descr) ? "A" : "AIL");
-        case (CHANNEL_ID_ELEVATION) : return ((short_descr) ? "E" : "ELE");
-        case (CHANNEL_ID_THROTTLE)  : return ((short_descr) ? "T" : "THR");
-        case (CHANNEL_ID_RUDDER)    : return ((short_descr) ? "R" : "RUD");
-        case (CHANNEL_ID_CH0)       : return ((short_descr) ? "0" : "CH0");
-        case (CHANNEL_ID_CH1)       : return ((short_descr) ? "1" : "CH1");
-        case (CHANNEL_ID_CH2)       : return ((short_descr) ? "2" : "CH2");
-        case (CHANNEL_ID_CH3)       : return ((short_descr) ? "3" : "CH3");
+        case (CH0)       : return ((short_descr) ? "0" : "CH0");
+        case (CH1)       : return ((short_descr) ? "1" : "CH1");
+        case (CH2)       : return ((short_descr) ? "2" : "CH2");
+        case (CH3)       : return ((short_descr) ? "3" : "CH3");
+        default          : return ((short_descr) ? "?" : "???");
     }
 }
 
+int32_t adc_get_throttle() {
+    return adc_get_channel_rescaled(chan_map[storage.chan_order][T]);
+}
+
+int32_t adc_get_gui_switch() {
+    return adc_get_channel_rescaled(CH3);
+}
+
+#define ADC_RESCALE_TARGET_RANGE 3200
+// return the adc channel rescaled from 0...4095 to -TARGET_RANGE...+TARGET_RANGE
 
 #define ADC_RESCALE_TARGET_RANGE 3200
 // return the adc channel rescaled from 0...4095 to -TARGET_RANGE...+TARGET_RANGE
 // switches are scaled manually, sticks use calibration data
 int32_t adc_get_channel_rescaled(uint8_t idx) {
     int32_t divider;
+    uint32_t adc_idx;
+
+    // convert channel idx to adc idx
+    adc_idx = ch_adc_map[idx];
 
     // fetch raw stick value (0..4095)
-    int32_t value = adc_get_channel(idx);
+    int32_t value = adc_get_channel(adc_idx);
 
     // sticks are ch0..3 and use calibration coefficents:
-    if (idx < 4) {
+    if (adc_idx < 4) {
         // apply center calibration value:
-        value = value - (int16_t)storage.stick_calibration[idx][1];
+        value = value - (int16_t)storage.stick_calibration[adc_idx][1];
 
         // now rescale this to +/- TARGET_RANGE
         // fetch divider
         if (value < 0) {
-            divider = storage.stick_calibration[idx][1] - storage.stick_calibration[idx][0];
+            divider = storage.stick_calibration[adc_idx][1] - storage.stick_calibration[adc_idx][0];
         } else {
-            divider = storage.stick_calibration[idx][2] - storage.stick_calibration[idx][1];
+            divider = storage.stick_calibration[adc_idx][2] - storage.stick_calibration[adc_idx][1];
         }
         // apply the scale
         value = (value * ADC_RESCALE_TARGET_RANGE) / divider;
@@ -141,14 +217,9 @@ int32_t adc_get_channel_rescaled(uint8_t idx) {
     }
 
     // apply the scale factor:
-    switch (idx) {
-        default:
-            // do not apply scale
-            break;
-        case (CHANNEL_ID_AILERON):
-        case (CHANNEL_ID_ELEVATION):
-            value = (value * storage.model[storage.current_model].stick_scale) / 100;
-            break;
+    ch_id_t chan = chan_map[storage.chan_order][idx];
+    if ((chan == A) || (chan == E)) {
+        value = (value * storage.model[storage.current_model].stick_scale) / 100;
     }
 
     // limit value to -3200 ... 3200
@@ -168,7 +239,6 @@ uint16_t adc_get_channel_packetdata(uint8_t idx) {
     val = val + 2250;
     return (uint16_t) val;
 }
-
 
 static void adc_init_rcc(void) {
     debug("adc: init rcc\n"); debug_flush();
@@ -314,7 +384,7 @@ void adc_process(void) {
         } else {
             // low pass filter battery voltage
             adc_battery_voltage_raw_filtered = adc_battery_voltage_raw_filtered +
-                                     (4 * (adc_data[10] - adc_battery_voltage_raw_filtered)) / 128;
+                (4 * (adc_data[10] - adc_battery_voltage_raw_filtered)) / 128;
         }
 
         // fine, arm DMA again:

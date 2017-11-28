@@ -36,6 +36,18 @@
 #include "screen.h"
 #include "assert.h"
 
+char *rc_mode_text[] = {
+    "MODE 1",
+    "MODE 2",
+    "MODE 3",
+    "MODE 4"
+};
+
+char *ch_order_text[] = {
+    "AETR",
+    "TAER"
+};
+
 static uint32_t gui_config_counter;
 static uint32_t gui_shutdown_pressed;
 static uint8_t gui_active = 0;
@@ -77,7 +89,10 @@ static void gui_cb_next_page(void);
 static void gui_cb_config_back(void);
 static void gui_cb_config_save(void);
 static void gui_cb_config_stick_cal(void);
+static void gui_cb_config_chan_order(void);
+static void gui_cb_config_rc_mode(void);
 static void gui_cb_config_model(void);
+static void gui_cb_config_channel_settings(void);
 static void gui_cb_config_exit(void);
 static void gui_cb_setup_clonetx(void);
 static void gui_cb_setup_bootloader(void);
@@ -95,6 +110,7 @@ static void gui_render_settings(void);
 static void gui_render_rssi(void);
 static void gui_config_main_render(void);
 static void gui_config_model_render(void);
+static void gui_config_channel_settings_render(void);
 static void gui_setup_clonetx_render(void);
 static void gui_setup_bindmode_render(void);
 static void gui_setup_bootloader_render(void);
@@ -292,6 +308,11 @@ static void gui_cb_config_back(void) {
     gui_page = GUI_PAGE_CONFIG_MAIN;
 }
 
+static void gui_cb_config_save_channel_settings(void) {
+    gui_cb_config_save();
+    init_ch_adc_map();
+}
+
 static void gui_cb_config_save(void) {
     storage_save();
     gui_cb_config_back();
@@ -310,8 +331,26 @@ static void gui_cb_config_stick_cal(void) {
     gui_page = GUI_PAGE_CONFIG_STICK_CAL;
 }
 
+static void gui_cb_config_chan_order(void) {
+    storage.chan_order++;
+    storage.chan_order %= CH_ORDER_CNT;
+
+    gui_page = GUI_PAGE_CONFIG_CHANNEL_SETTINGS;
+}
+
+static void gui_cb_config_rc_mode(void) {
+    storage.rc_mode++;
+    storage.rc_mode %= MODE_CNT;
+
+    gui_page = GUI_PAGE_CONFIG_CHANNEL_SETTINGS;
+}
+
 static void gui_cb_config_model(void) {
     gui_page = GUI_PAGE_CONFIG_MODEL_SETTINGS;
+}
+
+static void gui_cb_config_channel_settings(void) {
+    gui_page = GUI_PAGE_CONFIG_CHANNEL_SETTINGS;
 }
 
 static void gui_cb_setup_clonetx(void) {
@@ -392,7 +431,7 @@ static void gui_process_logic(void) {
     }
 
     // count down when
-    if (adc_get_channel_rescaled(CHANNEL_ID_THROTTLE) >= ADC_RESCALED_ZERO_THRESHOLD) {
+    if (adc_get_throttle() >= ADC_RESCALED_ZERO_THRESHOLD) {
         // do timer logic, handle countdown
         if (second_elapsed) {
             gui_model_timer--;
@@ -439,7 +478,7 @@ void gui_loop(void) {
         }
 
         // render ui
-        if (adc_get_channel_rescaled(CHANNEL_ID_CH3) < 0) {
+        if (adc_get_gui_switch() < 0) {
             // show console on switch down
             console_render();
             screen_update();
@@ -688,6 +727,11 @@ static void gui_config_render(void) {
             // model config
             gui_config_model_render();
             break;
+
+        case (GUI_PAGE_CONFIG_CHANNEL_SETTINGS) :
+            // channel config
+            gui_config_channel_settings_render();
+            break;
     }
 
     screen_update();
@@ -811,6 +855,8 @@ static void gui_config_main_render(void) {
     gui_add_button_smallfont(3, 10 + 0*17, 50, 15, "STICK CAL", &gui_cb_config_stick_cal);
     gui_add_button_smallfont(3, 10 + 1*17, 50, 15, "MODEL CFG", &gui_cb_config_model);
 
+    gui_add_button_smallfont(3, 10 + 2*17, 50, 15, "CHAN CFG", &gui_cb_config_channel_settings);
+
     // exit button
     gui_add_button_smallfont(74, 10 + 2*17, 50, 15, "EXIT", &gui_cb_setup_exit);
 }
@@ -847,13 +893,13 @@ static void gui_render_usb(void) {
     screen_draw_round_rect(128-sx-w, 10, w, h, 3, 1);
 
     // left
-    uint16_t x = w/2 + (w/2 * adc_get_channel_rescaled(CHANNEL_ID_RUDDER))/3200 - 2;
-    uint16_t y = h/2 - (h/2 * adc_get_channel_rescaled(CHANNEL_ID_THROTTLE))/3200;
+    uint16_t x = w/2 + (w/2 * adc_get_channel_rescaled(3))/3200 - 2;
+    uint16_t y = h/2 - (h/2 * adc_get_channel_rescaled(0))/3200;
     screen_set_pixels(10+x-1, 10+y-1, 10+x+1, 10+y+1, 1);
 
     // right
-    x = w/2 + (w/2 * adc_get_channel_rescaled(CHANNEL_ID_AILERON))/3200 - 2;
-    y = h/2 - (h/2 * adc_get_channel_rescaled(CHANNEL_ID_ELEVATION))/3200;
+    x = w/2 + (w/2 * adc_get_channel_rescaled(1))/3200 - 2;
+    y = h/2 - (h/2 * adc_get_channel_rescaled(2))/3200;
     screen_set_pixels(128-sx-w+x-1, 10+y-1, 128-sx-w+x+1, 10+y+1, 1);
 
 
@@ -969,7 +1015,6 @@ static void gui_setup_clonetx_render(void) {
             // DONE. REBOOT NECESSARY
             break;
     }
-    
 }
 
 static void gui_setup_bindmode_render(void) {
@@ -1157,7 +1202,7 @@ static void gui_config_stick_calibration_render(void) {
     y += h;
 
     for (i = 0; i < 4; i++) {
-        screen_puts_xy(x, y, 1, adc_get_channel_name(i, false));
+        screen_puts_xy(x, y, 1, adc_get_channel_name_for_adc(i, false));
         for (a = 0; a < 3; a++) {
             screen_put_uint14(x+(a+1)*4*w+a*2*w, y, 1, storage.stick_calibration[i][a]);
         }
@@ -1166,6 +1211,20 @@ static void gui_config_stick_calibration_render(void) {
 
     // render buttons and set callback
     gui_add_button_smallfont(89, 34 + 0*15, 35, 13, "SAVE", &gui_cb_config_save);
+    gui_add_button_smallfont(89, 34 + 1*15, 35, 13, "BACK", &gui_cb_config_exit);
+
+    // gui_add_button_smallfont(94, 34 + 0*18, font, " SAVE ", &gui_cb_config_save);
+    // gui_add_button_smallfont(94, 34 + 1*18, font, " BACK ", &gui_cb_config_back);
+}
+
+static void gui_config_channel_settings_render(void) {
+    gui_config_header_render("CHANNEL SETTINGS");
+
+    gui_add_button_smallfont(3, 10 + 0*17, 50, 15, ch_order_text[storage.chan_order], &gui_cb_config_chan_order);
+    gui_add_button_smallfont(3, 10 + 1*17, 50, 15, rc_mode_text[storage.rc_mode], &gui_cb_config_rc_mode);
+
+    // render buttons and set callback
+    gui_add_button_smallfont(89, 34 + 0*15, 35, 13, "SAVE", &gui_cb_config_save_channel_settings);
     gui_add_button_smallfont(89, 34 + 1*15, 35, 13, "BACK", &gui_cb_config_exit);
 
     // gui_add_button_smallfont(94, 34 + 0*18, font, " SAVE ", &gui_cb_config_save);

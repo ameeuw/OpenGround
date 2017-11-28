@@ -192,6 +192,7 @@ int main(void) {
     // adc_test();
     gui_init();
 
+    init_ch_adc_map();
 
     debug("main: init done.\n"); debug_flush();
 
