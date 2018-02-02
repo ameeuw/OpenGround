@@ -228,7 +228,7 @@ int32_t adc_get_channel_rescaled(uint8_t idx) {
     return value;
 }
 
-uint16_t adc_get_channel_packetdata(uint8_t idx) {
+uint16_t adc_get_channel_packetdata(uint8_t idx, int32_t offset) {
     // frsky packets send us * 1.5
     // where 1000 us =   0%
     //       2000 us = 100%
@@ -236,7 +236,7 @@ uint16_t adc_get_channel_packetdata(uint8_t idx) {
     // 6400 => 1500 <=> 64 = 15
     int32_t val = adc_get_channel_rescaled(idx);
     val = (15 * val) / 64;
-    val = val + 2250;
+    val += offset;
     return (uint16_t) val;
 }
 

@@ -133,12 +133,12 @@ inline uint8_t cc2500_get_register(uint8_t address) {
 
     // request address(read request has bit7 set)
     #if CC2500_DEBUG_STATUSBYTE
-        uint8_t status = spi_tx(address | 0x80);
+        uint8_t status = spi_tx(address | CC2500_READ_SINGLE);
         debug("spi status = ");
         debug_put_hex8(status);
         debug_put_newline();
     #else
-        spi_tx(address | 0x80);
+        spi_tx(address | CC2500_READ_SINGLE);
     #endif  // CC2500_DEBUG_STATUSBYTE
 
     // fetch result:
@@ -314,6 +314,26 @@ void cc2500_transmit_packet(volatile uint8_t *buffer, uint8_t len) {
     cc2500_register_write_multi(CC2500_FIFO, (uint8_t *)buffer, len);
     // and send!
     cc2500_strobe(RFST_STX);
+}
+
+void cc2500_set_power() {
+    cc2500_set_register(PA_TABLE0, 0xff);
+    /* FIXME
+	uint8_t power=CC2500_BIND_POWER;
+	if(IS_BIND_DONE_on)
+		#ifdef CC2500_ENABLE_LOW_POWER
+			power=IS_POWER_FLAG_on?CC2500_HIGH_POWER:CC2500_LOW_POWER;
+		#else
+			power=CC2500_HIGH_POWER;
+		#endif
+	if(IS_RANGE_FLAG_on)
+		power=CC2500_RANGE_POWER;
+	if(prev_power != power)
+	{
+		cc2500_set_register(CC2500_3E_PATABLE, power);
+		prev_power=power;
+	}
+    */
 }
 
 /*

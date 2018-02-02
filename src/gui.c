@@ -35,6 +35,7 @@
 #include "touch.h"
 #include "screen.h"
 #include "assert.h"
+#include "frsky_tx_clone.h"
 
 char *rc_mode_text[] = {
     "MODE 1",
@@ -80,6 +81,8 @@ static void gui_add_button_smallfont(uint8_t x, uint8_t y, uint8_t w, uint8_t h,
 static void gui_cb_model_timer_reload(void);
 static void gui_cb_model_prev(void);
 static void gui_cb_model_next(void);
+static void gui_cb_rxnum_prev(void);
+static void gui_cb_rxnum_next(void);
 static void gui_cb_setting_model_stickscale(void);
 static void gui_cb_setting_model_name(void);
 static void gui_cb_setting_model_timer(void);
@@ -249,6 +252,18 @@ static void gui_cb_model_next(void) {
     }
 }
 
+static void gui_cb_rxnum_prev(void) {
+    if (storage.model[storage.current_model].rx_number > 0) {
+        storage.model[storage.current_model].rx_number--;
+    }
+}
+
+static void gui_cb_rxnum_next(void) {
+    if (storage.model[storage.current_model].rx_number < 255) {
+        storage.model[storage.current_model].rx_number++;
+    }
+}
+
 static void gui_cb_setting_model_stickscale(void) {
     gui_page    |= GUI_PAGE_CONFIG_OPTION_FLAG;
     gui_sub_page = GUI_SUBPAGE_SETTING_MODEL_SCALE;
@@ -316,6 +331,7 @@ static void gui_cb_config_save_channel_settings(void) {
 static void gui_cb_config_save(void) {
     storage_save();
     gui_cb_config_back();
+    frsky_init();
 }
 
 static void gui_cb_config_stick_cal(void) {
@@ -506,7 +522,7 @@ void gui_loop(void) {
         // wait for next gui iteration
         while (!timeout_timed_out()) {
             // do some processing instead of wasting cpu cycles
-            frsky_handle_telemetry();
+            //FIXME frsky_handle_telemetry();
 
             usb_handle_data();
         }
@@ -566,8 +582,8 @@ static void gui_render_rssi(void) {
     screen_puts_xy(x, 1, 0, "120|105");
 
     // show RSSI
-    uint8_t rssi, rssi_telemetry;
-    frsky_get_rssi(&rssi, &rssi_telemetry);
+    uint8_t rssi = 0, rssi_telemetry = 0;
+    //FIXME frsky_get_rssi(&rssi, &rssi_telemetry);
 
     screen_put_uint8(x, 1, 0, rssi_telemetry);
     x += (GUI_STATUSBAR_FONT[FONT_FIXED_WIDTH]+1) * 3;
@@ -1066,6 +1082,14 @@ static void gui_config_model_render_main(void) {
     // now use smaller font
     // font = font_tomthumb3x5;
     // screen_set_font(font);
+
+    // rx number
+    if (storage.model[storage.current_model].protocol == FRSKY_X) {
+        gui_add_button_smallfont(60, y, 15, 10, "<", &gui_cb_rxnum_prev);
+        screen_set_font(font_system5x7, 0, 0);
+        screen_put_uint8(75, y + 1, 1, storage.model[storage.current_model].rx_number);
+        gui_add_button_smallfont(75 + screen_strlen("123"), y, 15, 10, ">", &gui_cb_rxnum_next);
+    }
 
     // add stick scaling
     gui_add_button_smallfont(3, y, 40, 13, "SCALE", &gui_cb_setting_model_stickscale);

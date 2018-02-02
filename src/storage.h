@@ -39,6 +39,12 @@ void storage_mode_set_name(uint8_t index, char *str);
 static void storage_read(uint8_t *storage_ptr, uint16_t len);*/
 
 typedef enum {
+    FRSKY_X = 0,
+    FRSKY_X_EU,
+    FRSKY_D,
+} frsky_proto_t;
+
+typedef enum {
     MODE_1 = 0,
     MODE_2,
     MODE_3,
