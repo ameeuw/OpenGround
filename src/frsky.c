@@ -247,13 +247,12 @@ void frsky_init(void) {
     cc2500_init();
 
     // check if spi is working properly
-    /*if (!frsky_check_transceiver()) {
+    if (!frsky_check_transceiver()) {
         // no cc2500 detected - abort
         debug("frsky: no cc2500 detected. abort\n");
         debug_flush();
         return;
     }
-    */
 
     if (storage.model[storage.current_model].protocol == FRSKY_X) {
         initFrSkyX();
@@ -342,11 +341,11 @@ uint8_t frsky_check_transceiver(void) {
 
     // check version:
     debug("frsky: cc2500 partnum 0x");
-    partnum = cc2500_get_register_burst(partnum);
+    partnum = cc2500_get_register_burst(CC2500_30_PARTNUM);
     debug_put_hex8(partnum);
 
     debug(" version 0x");
-    version = cc2500_get_register_burst(version);
+    version = cc2500_get_register_burst(CC2500_31_VERSION);
     debug_put_hex8(version);
     debug_put_newline();
 
