@@ -46,7 +46,6 @@ extern uint16_t state;
 extern uint8_t packet_count;
 extern uint8_t option, prev_option;
 
-#define FRSKY_HOPTABLE_SIZE 47
 extern uint8_t cal_data[FRSKY_HOPTABLE_SIZE];
 
 // Telemetry

@@ -195,10 +195,14 @@ uint16_t ReadFrSkyX()
     switch(state)
     {
         default:
-            if (!(state % 100))
-                led_button_r_off();
             cc2500_enter_txmode();
-            set_start(47);
+
+            // set channel 0 and calibrate
+            cc2500_strobe(CC2500_SIDLE);
+            cc2500_set_register(CC2500_0A_CHANNR, 0);
+            cc2500_strobe(CC2500_SCAL);
+            while (cc2500_get_register(CC2500_35_MARCSTATE) != 0x01) {}
+
             cc2500_set_power();
             cc2500_strobe(CC2500_SFRX);
             frskyX_build_bind_packet();
@@ -211,8 +215,6 @@ uint16_t ReadFrSkyX()
             else
             */
                 state++;
-                if (!(state % 500))
-                    led_button_r_on();
                 if (state == FRSKY_BIND_DONE)
                     state = FRSKY_BIND;
             return 9000;
@@ -315,4 +317,5 @@ uint16_t initFrSkyX()
 
 void bind_x(void) {
     state = FRSKY_BIND;
+    initialize_data(1);
 }
