@@ -171,7 +171,11 @@ char *adc_get_channel_name(uint8_t i, bool short_descr) {
 }
 
 int32_t adc_get_throttle() {
-    return adc_get_channel_rescaled(chan_map[storage.chan_order][T]);
+    for (int i = 0; i < 4; i++)
+        if ((chan_map[storage.chan_order][i]) == T)
+            return adc_get_channel_rescaled(i);
+
+    return 0;
 }
 
 int32_t adc_get_gui_switch() {
